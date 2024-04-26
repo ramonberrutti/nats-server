@@ -210,6 +210,10 @@ type ExternalStream struct {
 	DeliverPrefix string `json:"deliver"`
 }
 
+type txState struct {
+	msgs []*inMsg
+}
+
 // Stream is a jetstream stream of messages. When we receive a message internally destined
 // for a Stream we will direct link from the client to this structure.
 type stream struct {
@@ -244,6 +248,9 @@ type stream struct {
 	active    bool
 	ddloaded  bool
 	closed    atomic.Bool
+
+	// transaction
+	tx map[string]*txState
 
 	// Mirror
 	mirror *sourceInfo
@@ -346,6 +353,8 @@ const (
 	JSMsgRollup           = "Nats-Rollup"
 	JSMsgSize             = "Nats-Msg-Size"
 	JSResponseType        = "Nats-Response-Type"
+	JSTransactionId       = "Nats-Transaction-Id"
+	JSTransactionCommit   = "Nats-Transaction-Commit"
 )
 
 // Headers for republished messages and direct gets.
@@ -569,6 +578,7 @@ func (a *Account) addStreamWithAssignment(config *StreamConfig, fsConfig *FileSt
 		mqch:      make(chan struct{}),
 		uch:       make(chan struct{}, 4),
 		sch:       make(chan struct{}, 1),
+		tx:        make(map[string]*txState),
 	}
 
 	// Start our signaling routine to process consumers.
@@ -3977,6 +3987,14 @@ func getExpectedLastSeqPerSubject(hdr []byte) (uint64, bool) {
 	return uint64(parseInt64(bseq)), true
 }
 
+func getTransactionId(hdr []byte) string {
+	return string(getHeader(JSTransactionId, hdr))
+}
+
+func getTransactionCommit(hdr []byte) string {
+	return string(getHeader(JSTransactionCommit, hdr))
+}
+
 // Signal if we are clustered. Will acquire rlock.
 func (mset *stream) IsClustered() bool {
 	mset.mu.RLock()
@@ -4513,6 +4531,29 @@ func (mset *stream) processJetStreamMsg(subject, reply string, hdr, msg []byte, 
 					outq.sendMsg(reply, b)
 				}
 				return errStreamMismatch
+			}
+		}
+
+		// Check if we have a transaction in the headers.
+		if transactionId := getTransactionId(hdr); transactionId != _EMPTY_ {
+			// If we are clustered we need to check if we are the leader for this transaction.
+			if _, ok := mset.tx[transactionId]; !ok {
+				mset.tx[transactionId] = &txState{}
+			}
+
+			// Add message to transaction.
+			// subject, reply string, hdr, msg []byte
+			mset.tx[transactionId].msgs = append(mset.tx[transactionId].msgs, &inMsg{subject, _EMPTY_, hdr, msg, mt})
+
+			fmt.Println("HEREE!!")
+			// Commit header.
+			if commit := getTransactionCommit(hdr); commit != _EMPTY_ {
+				for _, m := range mset.tx[transactionId].msgs {
+					// TODO: understand how queueInbound works
+					//mset.queueInbound(mset.msgs, m.subj, m.rply, m.hdr, m.msg, mt)
+					fmt.Printf("TX(%s) subj: %s, rply: %s, hdr: %s, msg: %s\n", transactionId, m.subj, m.rply, m.hdr, m.msg)
+				}
+				delete(mset.tx, transactionId)
 			}
 		}
 
