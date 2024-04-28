@@ -4544,69 +4544,9 @@ func (mset *stream) processJetStreamMsg(subject, reply string, hdr, msg []byte, 
 			}
 		}
 
-		// Check if we have a transaction in the headers.
-		if transactionId := getTransactionId(hdr); transactionId != _EMPTY_ {
-			// If we are clustered we need to check if we are the leader for this transaction.
-			if _, ok := mset.tx[transactionId]; !ok {
-				// Maybe here check that sequence is 1.
-				mset.tx[transactionId] = &txState{}
-			}
-
-			expectedTxSeq := mset.tx[transactionId].lseq + 1
-			txSeq, hasTxSeq := getTransactionSeq(hdr)
-			if !hasTxSeq {
-				mset.mu.Unlock()
-				bumpCLFS()
-				fmt.Println("Error getting transaction sequence")
-				return
-			}
-
-			if txSeq != expectedTxSeq {
-				mset.mu.Unlock()
-				bumpCLFS()
-				if canRespond {
-					// resp.PubAck = &PubAck{Stream: name}
-					// resp.Error = NewJSStreamTxSequenceMismatchError(expectedTxSeq)
-					// b, _ := json.Marshal(resp)
-					// outq.sendMsg(reply, b)
-					fmt.Println("Reporting error for transaction sequence mismatch")
-				}
-
-				return fmt.Errorf("transaction sequence mismatch: %d vs %d", txSeq, expectedTxSeq)
-			}
-
-			// Add message to transaction.
-			// subject, reply string, hdr, msg []byte
-			mset.tx[transactionId].msgs = append(mset.tx[transactionId].msgs, &inMsg{subject, _EMPTY_, hdr, msg, mt})
-
-			fmt.Println("HEREE!!")
-
-			// Commit header.
-			if commit := getTransactionCommit(hdr); commit != _EMPTY_ {
-				for _, m := range mset.tx[transactionId].msgs {
-					// TODO: understand how queueInbound works
-					//mset.queueInbound(mset.msgs, m.subj, m.rply, m.hdr, m.msg, mt)
-					fmt.Printf("TX(%s) subj: %s,  msg: %s\n", transactionId, m.subj, m.msg)
-				}
-				delete(mset.tx, transactionId)
-			} else {
-				mset.tx[transactionId].lseq = txSeq
-				mset.mu.Unlock()
-				bumpCLFS()
-				fmt.Printf("TX(%s) seq: %d\n", transactionId, txSeq)
-				if canRespond {
-					fmt.Println("Sending response")
-					response := append(pubAck, strconv.FormatUint(txSeq, 10)...)
-					response = append(response, ",\"duplicate\": true}"...)
-					outq.sendMsg(reply, response)
-				}
-
-				return nil
-			}
-		}
-
 		// Dedupe detection. This is done at the cluster level for dedupe detectiom above the
 		// lower layers. But we still need to pull out the msgId.
+		// TODO(ramonberrutti): Ignore dedupe detection for transactions
 		if msgId = getMsgId(hdr); msgId != _EMPTY_ {
 			// Do real check only if not clustered or traceOnly flag is set.
 			if !isClustered || traceOnly {
@@ -4792,6 +4732,72 @@ func (mset *stream) processJetStreamMsg(subject, reply string, hdr, msg []byte, 
 	if traceOnly {
 		mset.mu.Unlock()
 		return nil
+	}
+
+	// Check for transactions here.
+	if len(hdr) > 0 {
+		outq := mset.outq
+
+		// Check if we have a transaction in the headers.
+		if transactionId := getTransactionId(hdr); transactionId != _EMPTY_ {
+			// If we are clustered we need to check if we are the leader for this transaction.
+			if _, ok := mset.tx[transactionId]; !ok {
+				// Maybe here check that sequence is 1.
+				mset.tx[transactionId] = &txState{}
+			}
+
+			expectedTxSeq := mset.tx[transactionId].lseq + 1
+			txSeq, hasTxSeq := getTransactionSeq(hdr)
+			if !hasTxSeq {
+				mset.mu.Unlock()
+				bumpCLFS()
+				fmt.Println("Error getting transaction sequence")
+				return
+			}
+
+			if txSeq != expectedTxSeq {
+				mset.mu.Unlock()
+				bumpCLFS()
+				if canRespond {
+					// resp.PubAck = &PubAck{Stream: name}
+					// resp.Error = NewJSStreamTxSequenceMismatchError(expectedTxSeq)
+					// b, _ := json.Marshal(resp)
+					// outq.sendMsg(reply, b)
+					fmt.Println("Reporting error for transaction sequence mismatch")
+				}
+
+				return fmt.Errorf("transaction sequence mismatch: %d vs %d", txSeq, expectedTxSeq)
+			}
+
+			// Add message to transaction.
+			// subject, reply string, hdr, msg []byte
+			mset.tx[transactionId].msgs = append(mset.tx[transactionId].msgs, &inMsg{subject, _EMPTY_, hdr, msg, mt})
+
+			fmt.Println("HEREE!!")
+
+			// Commit header.
+			if commit := getTransactionCommit(hdr); commit != _EMPTY_ {
+				for _, m := range mset.tx[transactionId].msgs {
+					// TODO: understand how queueInbound works
+					//mset.queueInbound(mset.msgs, m.subj, m.rply, m.hdr, m.msg, mt)
+					fmt.Printf("TX(%s) subj: %s,  msg: %s\n", transactionId, m.subj, m.msg)
+				}
+				delete(mset.tx, transactionId)
+			} else {
+				mset.tx[transactionId].lseq = txSeq
+				mset.mu.Unlock()
+				bumpCLFS()
+				fmt.Printf("TX(%s) seq: %d\n", transactionId, txSeq)
+				if canRespond {
+					fmt.Println("Sending response")
+					response := append(pubAck, strconv.FormatUint(txSeq, 10)...)
+					response = append(response, '}')
+					outq.sendMsg(reply, response)
+				}
+
+				return nil
+			}
+		}
 	}
 
 	// Skip msg here.
