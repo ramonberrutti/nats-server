@@ -3396,6 +3396,10 @@ func (fs *fileStore) StoreMsg(subj string, hdr, msg []byte) (uint64, int64, erro
 	return seq, ts, err
 }
 
+func (fs *fileStore) StoreMsgs(msgs []StoreMsg) (uint64, int64, error) {
+	return 0, 0, fmt.Errorf("not supported")
+}
+
 // skipMsg will update this message block for a skipped message.
 // If we do not have any messages, just update the metadata, otherwise
 // we will place an empty record marking the sequence as used. The

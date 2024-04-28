@@ -251,6 +251,40 @@ func (ms *memStore) StoreMsg(subj string, hdr, msg []byte) (uint64, int64, error
 	return seq, ts, err
 }
 
+func (ms *memStore) StoreMsgs(msgs []StoreMsg) (uint64, int64, error) {
+	var err error
+	count, i := uint64(len(msgs)), uint64(0)
+	ms.mu.Lock()
+	seq, ts := ms.state.LastSeq+1, time.Now().UnixNano()
+	cb := ms.scb
+	for ; i < count; i++ {
+		// TODO: storeRawMsg should be optimized to handle multiple messages at once.
+		err = ms.storeRawMsg(msgs[i].subj, msgs[i].hdr, msgs[i].msg, seq+uint64(i), ts)
+		if err != nil {
+			break
+		}
+	}
+	if err != nil {
+		// Remove already stored messages.
+		// improve removeMsg to take a range of sequences.
+		// No need if we create a new storeRawMsgs method.
+	}
+	ms.mu.Unlock()
+
+	if err != nil {
+		seq, ts = 0, 0
+	}
+
+	// if err != nil {
+	// 	seq, ts = 0, 0
+	// } else if cb != nil {
+	// 	cb(1, int64(memStoreMsgSize(subj, hdr, msg)), seq, subj)
+	// }
+	_ = cb
+
+	return seq + count - 1, ts, nil
+}
+
 // SkipMsg will use the next sequence number but not store anything.
 func (ms *memStore) SkipMsg() uint64 {
 	// Grab time.
