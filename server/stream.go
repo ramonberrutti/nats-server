@@ -4565,6 +4565,7 @@ func (mset *stream) processJetStreamMsg(subject, reply string, hdr, msg []byte, 
 
 		// Expected last sequence per subject.
 		// If we are clustered we have prechecked seq > 0.
+		// TODO(ramonberrutti): Ignore this check for transactions
 		if seq, exists := getExpectedLastSeqPerSubject(hdr); exists {
 			// TODO(dlc) - We could make a new store func that does this all in one.
 			var smv StoreMsg
@@ -4590,6 +4591,7 @@ func (mset *stream) processJetStreamMsg(subject, reply string, hdr, msg []byte, 
 		}
 
 		// Expected last sequence.
+		// TODO(ramonberrutti): Ignore this check for transactions
 		if seq, exists := getExpectedLastSeq(hdr); exists && seq != mset.lseq {
 			mlseq := mset.lseq
 			mset.mu.Unlock()
@@ -4759,10 +4761,10 @@ func (mset *stream) processJetStreamMsg(subject, reply string, hdr, msg []byte, 
 				mset.mu.Unlock()
 				bumpCLFS()
 				if canRespond {
-					// resp.PubAck = &PubAck{Stream: name}
-					// resp.Error = NewJSStreamTxSequenceMismatchError(expectedTxSeq)
-					// b, _ := json.Marshal(resp)
-					// outq.sendMsg(reply, b)
+					resp.PubAck = &PubAck{Stream: name}
+					resp.Error = NewJSStreamTxSequenceMismatchError(expectedTxSeq)
+					b, _ := json.Marshal(resp)
+					outq.sendMsg(reply, b)
 					fmt.Println("Reporting error for transaction sequence mismatch")
 				}
 
