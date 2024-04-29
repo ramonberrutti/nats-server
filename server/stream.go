@@ -4519,11 +4519,18 @@ func (mset *stream) processJetStreamMsg(subject, reply string, hdr, msg []byte, 
 	}
 
 	// Process additional msg headers if still present.
-	var msgId string
+	var msgId, transactionId string
 	var rollupSub, rollupAll bool
 	isClustered := mset.isClustered()
 
+	// Check for transactional message.
 	if len(hdr) > 0 {
+		transactionId = getTransactionId(hdr)
+	}
+
+	// This headers are only processed if we are not in a transaction.
+	// If we are in a transaction, the headers are processed when we commit the transaction.
+	if len(hdr) > 0 && transactionId == _EMPTY_ {
 		outq := mset.outq
 
 		// Certain checks have already been performed if in clustered mode, so only check if not.
@@ -4730,6 +4737,7 @@ func (mset *stream) processJetStreamMsg(subject, reply string, hdr, msg []byte, 
 		ts = time.Now().UnixNano()
 	}
 
+	// TODO(ramonberrutti): Add transactionId trace.
 	mt.updateJetStreamEvent(subject, noInterest)
 	if traceOnly {
 		mset.mu.Unlock()
@@ -4741,7 +4749,7 @@ func (mset *stream) processJetStreamMsg(subject, reply string, hdr, msg []byte, 
 		outq := mset.outq
 
 		// Check if we have a transaction in the headers.
-		if transactionId := getTransactionId(hdr); transactionId != _EMPTY_ {
+		if transactionId != _EMPTY_ {
 			// If we are clustered we need to check if we are the leader for this transaction.
 			if _, ok := mset.tx[transactionId]; !ok {
 				// Maybe here check that sequence is 1.
